@@ -12,7 +12,7 @@ on:
           - build-apk
   push:
     paths:
-      - RestaurantBox.zip
+      - '**.zip'
 
 jobs:
   keystore:
@@ -42,11 +42,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip project
+      - name: Find and unzip project
         run: |
+          ZIP=$(find . -name "*.zip" -not -path "./.git/*" | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "No .zip file found in the repo. Files present:"
+            find . -not -path "./.git/*" -type f | head -50
+            exit 1
+          fi
+          echo "Using: $ZIP"
           mkdir project
-          unzip -q RestaurantBox.zip -d project
-          ls project
+          unzip -q "$ZIP" -d project
+          SETTINGS=$(find project -name settings.gradle.kts | head -n 1)
+          if [ -z "$SETTINGS" ]; then echo "settings.gradle.kts not found inside the zip"; exit 1; fi
+          echo "PROJECT_DIR=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         with:
@@ -65,7 +74,7 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
 
       - name: Build signed APK
-        working-directory: project
+        working-directory: ${{ env.PROJECT_DIR }}
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -74,4 +83,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: restaurant-box-apk
-          path: project/app/build/outputs/apk/release/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/release/*.apk
