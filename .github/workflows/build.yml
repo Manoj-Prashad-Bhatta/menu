@@ -1,0 +1,77 @@
+name: Restaurant Box build
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to run"
+        type: choice
+        default: build-apk
+        options:
+          - create-keystore
+          - build-apk
+  push:
+    paths:
+      - RestaurantBox.zip
+
+jobs:
+  keystore:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'create-keystore'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate signing key
+        env:
+          PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$PASS" ]; then echo "Add the secret KEYSTORE_PASSWORD first"; exit 1; fi
+          keytool -genkeypair -keystore release.jks -alias release \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PASS" -keypass "$PASS" -dname "CN=Restaurant Box"
+          echo "=== COPY THIS SHA1 INTO GOOGLE CLOUD ==="
+          keytool -list -v -keystore release.jks -storepass "$PASS" | grep -i "SHA1"
+          base64 -w0 release.jks > release.jks.b64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keystore-b64
+          path: release.jks.b64
+          retention-days: 1
+
+  build:
+    if: github.event_name == 'push' || inputs.action == 'build-apk'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: |
+          mkdir project
+          unzip -q RestaurantBox.zip -d project
+          ls project
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Decode signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "Add the secret KEYSTORE_BASE64 first"; exit 1; fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build signed APK
+        working-directory: project
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: restaurant-box-apk
+          path: project/app/build/outputs/apk/release/*.apk
